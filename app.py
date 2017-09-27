@@ -2,6 +2,7 @@
 # CI for ICC only calculated with ANOVA anyway.
 
 import logging
+import requests
 from flask import Flask, request, jsonify
 from statsmodels.formula.api import ols
 from scipy.stats import f
@@ -9,6 +10,7 @@ from scipy.stats import hmean
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+import math
 
 app = Flask(__name__)
 ALPHA = 0.05
@@ -35,6 +37,13 @@ def icc():
     method = req['method']
     clusters = pd.Series(req['x'])
     values = pd.Series(req['y'])
+    channel = req['channel']
+    url = req['url']
+    icc_background(clusters, method, values, channel, url)
+    return 'Move along.', 302
+
+
+def icc_background(clusters, method, values, channel, url):
     d = {'clusters': clusters, 'values': values}
     df = pd.DataFrame(d)
     lm = ols('values ~ clusters', data=df).fit()
@@ -62,22 +71,47 @@ def icc():
     f_u = (ms_a / ms_w) / up_F_2
     low_ci = (f_l - 1) / (f_l + n_not - 1)
     up_ci = (f_u - 1) / (f_u + n_not - 1)
+    deff = icc * (k - 1) + 1
+    deft = math.sqrt(deff)
     result = {
-        'ICC': icc, 'LowerCI': low_ci, 'UpperCI': up_ci, 'N': a, 'k': k,
-        'vara': var_a, 'varw': ms_w
+        'icc_est': icc, 'lower': low_ci, 'upper': up_ci, 'n': a, 'k': k,
+        'vara': var_a, 'varw': ms_w, 'deft': deft, 'des_eff': deff
     }
+    headers = {'Content-Type': 'application/json'}
     if method == 'ANOVA':
-        return jsonify(result)
+        requests.post(url + '/faye', json={
+            'channel': '/' + channel,
+            'data': {
+                'tasks_to_do': 1, 'tasks_done': 1, 'result': result
+            }
+        }, headers=headers)
+        return
     model = sm.MixedLM.from_formula(
         'values ~ 1', df, groups=df['clusters']
     )
+    requests.post(url + '/faye', json={
+        'channel': '/' + channel,
+        'data': {
+            'tasks_to_do': 1, 'tasks_done': 2
+        }
+    }, headers=headers)
     res = model.fit(reml=method, method='nm')
     tau = res.cov_re.groups[0]
     sigma2 = res.scale
     result['vara'] = tau
     result['varw'] = sigma2
-    result['ICC'] = tau / (tau + sigma2)
-    return jsonify(result)
+    result['icc_est'] = tau / (tau + sigma2)
+    deff = tau / (tau + sigma2) * (k - 1) + 1
+    deft = math.sqrt(deff)
+    result['des_eff'] = deff
+    result['deft'] = deft
+    requests.post(url + '/faye', json={
+        'channel': '/' + channel,
+        'data': {
+            'tasks_to_do': 2, 'tasks_done': 2, 'result': result
+        }
+    }, headers=headers)
+    return
 
 
 @app.route("/r2", methods=['POST'])
