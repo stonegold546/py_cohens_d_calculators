@@ -3,7 +3,7 @@
 
 import logging
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from statsmodels.formula.api import ols
 from scipy.stats import f
 from scipy.stats import hmean
@@ -123,6 +123,18 @@ def r2():
     cluster_var = str(req['cluster_var'])
     outcome_var = str(req['outcome_var'])
     null_equation = str(req['null_equation'])
+    optim = req['optim']
+    int_preds = req['int_preds']
+    l_one_preds = req['l_one_preds']
+    channel = req['channel']
+    url = req['url']
+    r2_background(cluster_var, outcome_var, null_equation, optim, int_preds,
+                  l_one_preds, headers, data, channel, url)
+    return 'Move along.', 302
+
+
+def r2_background(cluster_var, outcome_var, null_equation, optim, int_preds,
+                  l_one_preds, headers, data, channel, url):
     a = float(data[cluster_var].nunique())
     k = np.average(hmean(data.groupby(cluster_var).count()))
     print(cluster_var, outcome_var, headers)
@@ -130,11 +142,15 @@ def r2():
     model_b = sm.MixedLM.from_formula(
         null_equation, data, groups=data[cluster_var]
     )
+    headers = {'Content-Type': 'application/json'}
+    requests.post(url + '/faye', json={
+        'channel': '/' + channel,
+        'data': {
+            'tasks_to_do': 1, 'tasks_done': 2
+        }
+    }, headers=headers)
     optimizers = ['nm', 'powell', 'cg', 'bfgs']
-    optim = req['optim']
     res_b = model_b.fit(reml=False, method=optimizers[optim])
-    int_preds = req['int_preds']
-    l_one_preds = req['l_one_preds']
     eqn_data = create_fit_equation(
         int_preds, l_one_preds, cluster_var, outcome_var, data)
     fit_eqn = eqn_data[0]
@@ -150,7 +166,7 @@ def r2():
     result = {}
     level_one_r_2 = 1 - ((tau_f+sigma2_f)/(tau_b+sigma2_b))
     level_two_r_2 = 1 - ((tau_f+(sigma2_f/k))/(tau_b+(sigma2_b/k)))
-    result['a'] = a
+    result['n'] = a
     result['k'] = k
     result['vara_b'] = tau_b
     result['varw_b'] = sigma2_b
@@ -160,8 +176,8 @@ def r2():
     result['level_two_r_2'] = level_two_r_2
     result['convergence_b'] = res_b.converged
     result['convergence_f'] = res_f.converged
-    result['ICC_b'] = tau_b / (tau_b + sigma2_b)
-    result['ICC_f'] = tau_f / (tau_f + sigma2_f)
+    result['icc_b'] = tau_b / (tau_b + sigma2_b)
+    result['icc_f'] = tau_f / (tau_f + sigma2_f)
     try:
         model_mat = np.matrix(res_f.model.exog)
         fe = np.matrix(res_f.fe_params)
@@ -183,7 +199,13 @@ def r2():
     cent_2 = CNT + '2 after a variable name signifies grand-mean centering.'
     cent = cent_0 + cent_1 + cent_2
     result['results'] = base_results + fitted_results + cent
-    return jsonify(result)
+    requests.post(url + '/faye', json={
+        'channel': '/' + channel,
+        'data': {
+            'tasks_to_do': 2, 'tasks_done': 2, 'result': result
+        }
+    }, headers=headers)
+    return
 
 
 def square(x):
